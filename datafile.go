@@ -38,11 +38,45 @@ type datafile struct {
 	f *os.File
 
 	// whether to perform fsync on write or not
-	durable bool
+	syncOnWrite  bool
+	syncInterval time.Duration
 
 	// current file content size
 	size int
 	mu   sync.RWMutex
+}
+
+func NewDatafile(name string, syncOnWrite bool, syncInterval time.Duration) (*datafile, error) {
+	// open file in append only mode
+	f, err := os.OpenFile(name, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		return nil, err
+	}
+
+	// get file size for existing file
+	fi, err := os.Stat(f.Name())
+	if err != nil {
+		return nil, err
+	}
+
+	df := &datafile{
+		f:            f,
+		size:         int(fi.Size()),
+		syncOnWrite:  syncOnWrite,
+		syncInterval: syncInterval,
+	}
+
+	// sync file in the background if not highly durable
+	if !syncOnWrite {
+		go func() error {
+			if err := df.sync(); err != nil {
+				return err
+			}
+			return nil
+		}()
+	}
+
+	return df, nil
 }
 
 // append the key-value pair to the file and return the value size, and position
@@ -66,7 +100,7 @@ func (d *datafile) append(key string, val []byte) (size int, offset uint64, err 
 	}
 
 	// sync if durable
-	if d.durable {
+	if d.syncOnWrite {
 		if err := d.f.Sync(); err != nil {
 			return 0, 0, err
 		}
@@ -119,6 +153,26 @@ func (d *datafile) read(offset uint64) ([]byte, error) {
 	}
 	return val, nil
 
+}
+
+// sync flushes all buffered writes to disk in the specified interval
+func (d *datafile) sync() error {
+	if d.syncInterval <= 0 {
+		return nil
+	}
+
+	ticker := time.NewTicker(d.syncInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+
+		if err := d.f.Sync(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // close flushes all pending writes and to disk and finally close the file
