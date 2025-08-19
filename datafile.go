@@ -2,7 +2,6 @@ package beck
 
 import (
 	"encoding/binary"
-	"errors"
 	"hash/crc32"
 	"os"
 	"sync"
@@ -27,13 +26,6 @@ var (
 	enc = binary.LittleEndian
 )
 
-// errors
-var (
-	ErrInvalidRecord   = errors.New("invalid record format")
-	ErrInvalidChecksum = errors.New("invalid value checksum. potential data corruption")
-	ErrIncompleteWrite = errors.New("incomplete write")
-)
-
 type datafile struct {
 	f *os.File
 
@@ -41,14 +33,21 @@ type datafile struct {
 	syncOnWrite  bool
 	syncInterval time.Duration
 
+	readOnly bool
+
 	// current file content size
 	size int
 	mu   sync.RWMutex
 }
 
-func NewDatafile(name string, syncOnWrite bool, syncInterval time.Duration) (*datafile, error) {
-	// open file in append only mode
-	f, err := os.OpenFile(name, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0666)
+func NewDatafile(name string, readOnly bool, syncOnWrite bool, syncInterval time.Duration) (*datafile, error) {
+	// open file in append only mode if mode is rw
+	perm := os.O_RDONLY
+	if !readOnly {
+		perm = os.O_APPEND | os.O_WRONLY | os.O_CREATE
+	}
+
+	f, err := os.OpenFile(name, perm, 0666)
 	if err != nil {
 		return nil, err
 	}
@@ -67,7 +66,7 @@ func NewDatafile(name string, syncOnWrite bool, syncInterval time.Duration) (*da
 	}
 
 	// sync file in the background if not highly durable
-	if !syncOnWrite {
+	if !readOnly && !syncOnWrite {
 		go func() error {
 			if err := df.sync(); err != nil {
 				return err
@@ -144,7 +143,7 @@ func (d *datafile) read(offset uint64) ([]byte, error) {
 		return nil, ErrInvalidRecord
 	}
 
-	// extract key and value
+	// extract value
 	val := record[headerLen+keySize : headerLen+keySize+valSize]
 
 	// verify checksum and retrieve data

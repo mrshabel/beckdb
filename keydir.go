@@ -1,32 +1,52 @@
 package beck
 
-import "time"
+// keydir is the in-memory index handler of the entire database. It maps keys to their respective headers
+
+import (
+	"sync"
+	"time"
+)
 
 type keyDir struct {
 	// map of key to header
 	data map[string]*header
+	mu   sync.RWMutex
 }
 
 type header struct {
-	FileID        string
+	FileID        int
 	ValueSize     int
 	ValuePosition uint
 	Timestamp     int64
 }
 
+func NewKeyDir() *keyDir {
+	return &keyDir{
+		data: make(map[string]*header),
+	}
+}
+
 func (k *keyDir) get(key string) *header {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
 	return k.data[key]
 }
 
-func (k *keyDir) put(key string, fileID string, value []byte, valuePosition uint) bool {
+func (k *keyDir) put(key string, fileID int, value []byte, valuePosition uint) bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
 	// override if it exists
-	val := k.get(key)
+	val := k.data[key]
+
 	k.data[key] = &header{FileID: fileID, ValueSize: len(value), ValuePosition: valuePosition, Timestamp: time.Now().Unix()}
 	return val != nil
 }
 
 func (k *keyDir) delete(key string) bool {
-	if val := k.get(key); val == nil {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if _, ok := k.data[key]; !ok {
 		return false
 	}
 
@@ -35,6 +55,9 @@ func (k *keyDir) delete(key string) bool {
 }
 
 func (k *keyDir) listKeys() []string {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
+
 	keys := make([]string, 0, len(k.data))
 	for key := range k.data {
 		keys = append(keys, key)

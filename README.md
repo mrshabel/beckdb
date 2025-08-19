@@ -1,4 +1,4 @@
-BeckDB - Log Structured KV store
+# BeckDB - Log Structured KV store
 
 BeckDB is a bitcask-inspired non-relational database. It aims to provide low latency and high throughput read/writes by leveraging an in-memory key-value store and and append-only file for durability.
 
@@ -9,6 +9,11 @@ BeckDB is a bitcask-inspired non-relational database. It aims to provide low lat
 ## Setup
 
 ## Usage
+
+## Considerations
+
+-   The data and hints file are all kept in the data directory with extensions, `xx.log` and `xx.hint` respectively
+-
 
 ## References
 
