@@ -1,8 +1,8 @@
 package beck
 
 import (
+	"bytes"
 	"encoding/binary"
-	"hash/crc32"
 	"os"
 	"sync"
 	"time"
@@ -16,7 +16,7 @@ const (
 	crcLen       = 4
 	timestampLen = 8
 	keySizeLen   = 4
-	valSizeLen   = 4
+	valSizeLen   = 8
 	// header size without actual key and data (20 bytes)
 	headerLen = crcLen + timestampLen + keySizeLen + valSizeLen
 )
@@ -44,10 +44,10 @@ func NewDatafile(name string, readOnly bool, syncOnWrite bool, syncInterval time
 	// open file in append only mode if mode is rw
 	perm := os.O_RDONLY
 	if !readOnly {
-		perm = os.O_APPEND | os.O_WRONLY | os.O_CREATE
+		perm = os.O_APPEND | os.O_RDWR | os.O_CREATE
 	}
 
-	f, err := os.OpenFile(name, perm, 0666)
+	f, err := os.OpenFile(name, perm, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -61,18 +61,9 @@ func NewDatafile(name string, readOnly bool, syncOnWrite bool, syncInterval time
 	df := &datafile{
 		f:            f,
 		size:         int(fi.Size()),
+		readOnly:     readOnly,
 		syncOnWrite:  syncOnWrite,
 		syncInterval: syncInterval,
-	}
-
-	// sync file in the background if not highly durable
-	if !readOnly && !syncOnWrite {
-		go func() error {
-			if err := df.sync(); err != nil {
-				return err
-			}
-			return nil
-		}()
 	}
 
 	return df, nil
@@ -80,6 +71,11 @@ func NewDatafile(name string, readOnly bool, syncOnWrite bool, syncInterval time
 
 // append the key-value pair to the file and return the value size, and position
 func (d *datafile) append(key string, val []byte) (size int, offset uint64, err error) {
+	// skip if datafile is opened in read-only mode
+	if d.readOnly {
+		return 0, 0, ErrDatabaseReadOnly
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -130,7 +126,7 @@ func (d *datafile) read(offset uint64) ([]byte, error) {
 	// decode header
 	checksum := enc.Uint32(header[:crcLen])
 	keySize := int(enc.Uint32(header[crcLen+timestampLen : crcLen+timestampLen+keySizeLen]))
-	valSize := int(enc.Uint32(header[crcLen+timestampLen+keySizeLen : crcLen+timestampLen+keySizeLen+valSizeLen]))
+	valSize := int(enc.Uint64(header[crcLen+timestampLen+keySizeLen : crcLen+timestampLen+keySizeLen+valSizeLen]))
 
 	// read full record
 	recordSize := headerLen + keySize + valSize
@@ -144,20 +140,23 @@ func (d *datafile) read(offset uint64) ([]byte, error) {
 	}
 
 	// extract value
+	key := record[headerLen : headerLen+keySize]
 	val := record[headerLen+keySize : headerLen+keySize+valSize]
 
 	// verify checksum and retrieve data
-	if crc32.ChecksumIEEE(record[headerLen:]) != checksum {
+	if getChecksum(string(key), val) != checksum {
 		return nil, ErrInvalidRecord
 	}
 	return val, nil
-
 }
 
 // sync flushes all buffered writes to disk in the specified interval
 func (d *datafile) sync() error {
 	if d.syncInterval <= 0 {
 		return nil
+	}
+	if d.readOnly {
+		return ErrDatabaseReadOnly
 	}
 
 	ticker := time.NewTicker(d.syncInterval)
@@ -179,9 +178,13 @@ func (d *datafile) close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if err := d.f.Sync(); err != nil {
-		return err
+	// sync only when file is opened for writing
+	if !d.readOnly {
+		if err := d.f.Sync(); err != nil {
+			return err
+		}
 	}
+
 	return d.f.Close()
 }
 
@@ -196,13 +199,7 @@ type record struct {
 }
 
 func newRecord(key string, val []byte) *record {
-	// compute checksum of key and value combination as byte slice
-	keyBytes := []byte(key)
-	data := make([]byte, 0, len(keyBytes)+len(val))
-	copy(data, keyBytes)
-	copy(data[len(keyBytes):], val)
-
-	checksum := crc32.ChecksumIEEE(data)
+	checksum := getChecksum(key, val)
 
 	return &record{
 		checksum:  checksum,
@@ -216,21 +213,19 @@ func newRecord(key string, val []byte) *record {
 
 // encode returns a little-endian encoded format of the record as specified in the documentation.
 func (r *record) encode() ([]byte, error) {
-	// total size with header and key-value size
-	totalSize := headerLen + r.keySize + r.valSize
-	buf := make([]byte, totalSize)
+	// write header: checksum, timestamp, key size, val size to buffer
+	var buf bytes.Buffer
 
-	// write header: checksum, timestamp, key size, val size
-	enc.PutUint32(buf[:crcLen], r.checksum)
-	enc.PutUint64(buf[crcLen:timestampLen], uint64(r.timestamp))
-	enc.PutUint64(buf[crcLen+timestampLen:], uint64(r.keySize))
-	enc.PutUint64(buf[crcLen+timestampLen+keySizeLen:crcLen+timestampLen+keySizeLen+valSizeLen], uint64(r.valSize))
+	binary.Write(&buf, enc, r.checksum)
+	binary.Write(&buf, enc, r.timestamp)
+	binary.Write(&buf, enc, uint32(r.keySize))
+	binary.Write(&buf, enc, uint64(r.valSize))
 
-	// write data into buffer. key first followed by value
-	copy(buf[headerLen:headerLen+r.keySize], []byte(r.key))
-	copy(buf[headerLen+r.keySize:], r.val)
+	// write key and val
+	buf.WriteString(r.key)
+	buf.Write(r.val)
 
-	return buf, nil
+	return buf.Bytes(), nil
 }
 
 // decodeRecord attempts to decode the binary data into the record
@@ -243,7 +238,7 @@ func decodeRecord(data []byte) (*record, error) {
 	checksum := enc.Uint32(data[:crcLen])
 	timestamp := int64(enc.Uint64(data[crcLen : crcLen+timestampLen]))
 	keySize := int(enc.Uint32(data[crcLen+timestampLen : crcLen+timestampLen+keySizeLen]))
-	valSize := int(enc.Uint32(data[crcLen+timestampLen+keySizeLen : crcLen+timestampLen+keySizeLen+valSizeLen]))
+	valSize := int(enc.Uint64(data[crcLen+timestampLen+keySizeLen : crcLen+timestampLen+keySizeLen+valSizeLen]))
 
 	if len(data) < headerLen+keySize+valSize {
 		return nil, ErrInvalidRecord

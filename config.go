@@ -9,6 +9,15 @@ const (
 
 	datafileExt = ".data"
 	hintFileExt = ".hint"
+
+	// maximum length of key in bytes
+	maxKeySize = 32768
+	// maximum length of value in bytes
+	maxValueSize = 1 << 20
+)
+
+var (
+	tombstoneVal = []byte(nil)
 )
 
 type Config struct {

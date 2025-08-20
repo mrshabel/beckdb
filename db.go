@@ -24,8 +24,8 @@ type Beck struct {
 // prefer to sync the write file after every write operation).
 // The directory must be readable and writable by this process, and
 // only one process may open a Bitcask with read write at a time.
-func Open(dataDir string, cfg *Config) (*Beck, error) {
-	db := &Beck{}
+func Open(cfg *Config) (*Beck, error) {
+	db := &Beck{oldDataFiles: make(map[int]*datafile)}
 	if cfg == nil {
 		cfg = DefaultConfig
 	}
@@ -33,7 +33,7 @@ func Open(dataDir string, cfg *Config) (*Beck, error) {
 
 	// get all existing datafiles
 	recentFileID := 0
-	datafiles, err := getDatafiles(dataDir)
+	datafiles, err := getDatafiles(cfg.DataDir)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,7 @@ func Open(dataDir string, cfg *Config) (*Beck, error) {
 
 		df, err := NewDatafile(dfPath, true, false, 0)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open datafile: %w", err)
+			return nil, fmt.Errorf("failed to open datafile, path=(%s): %w", dfPath, err)
 		}
 
 		db.oldDataFiles[fileID] = df
@@ -58,9 +58,10 @@ func Open(dataDir string, cfg *Config) (*Beck, error) {
 
 	// setup active file
 	db.activeIndex = recentFileID + 1
-	db.activeDatafile, err = NewDatafile(fmt.Sprintf("%d.%s", db.activeIndex, datafileExt), false, cfg.SyncOnWrite, cfg.SyncInterval)
+	activeDfPath := getDatafilePath(cfg.DataDir, db.activeIndex)
+	db.activeDatafile, err = NewDatafile(activeDfPath, false, cfg.SyncOnWrite, cfg.SyncInterval)
 	if err != nil {
-		return nil, fmt.Errorf("failed to setup active datafile: %w", err)
+		return nil, fmt.Errorf("failed to setup active datafile, path=(%s): %w", activeDfPath, err)
 	}
 
 	// setup keydir
@@ -69,6 +70,11 @@ func Open(dataDir string, cfg *Config) (*Beck, error) {
 
 	// TODO: setup a lockfile to allow only a single writer to update db if multiple processes open it in rw mode.
 	// this will prevent database corruption
+
+	// periodically flush buffer if user opted for sync on write
+	if !cfg.ReadOnly && cfg.SyncOnWrite {
+		go db.activeDatafile.sync()
+	}
 
 	return db, nil
 }
@@ -83,11 +89,11 @@ func (db *Beck) Get(key string) ([]byte, error) {
 
 	// retrieve value from datadir
 	var df *datafile
-	fileId := header.FileID
-	if fileId == db.activeIndex {
+	fileID := header.FileID
+	if fileID == db.activeIndex {
 		df = db.activeDatafile
 	} else {
-		df = db.oldDataFiles[fileId]
+		df = db.oldDataFiles[fileID]
 	}
 
 	if df == nil {
@@ -102,19 +108,62 @@ func (db *Beck) Get(key string) ([]byte, error) {
 }
 
 // Put stores a key and value to the datastore. It replaces the value if it already exists
-func (db *Beck) Put(key string, val []byte) ([]byte, error)
+func (db *Beck) Put(key string, val []byte) error {
+	if err := validateEntry(key, val); err != nil {
+		return err
+	}
+	// append to datastore then write to keydir
+	_, offset, err := db.activeDatafile.append(key, val)
+	if err != nil {
+		return err
+	}
+
+	db.keyDir.put(key, db.activeIndex, val, uint(offset))
+	return nil
+}
 
 // Delete removes a record by key from a the datastore. An error is returned if the key is not found
-func (db *Beck) Delete(key string) error
+func (db *Beck) Delete(key string) error {
+	// check if val exists
+	if header := db.keyDir.get(key); header == nil {
+		return ErrKeyNotFound
+	}
+
+	// append tombstone entry to datastore then write to keydir
+	_, offset, err := db.activeDatafile.append(key, tombstoneVal)
+	if err != nil {
+		return err
+	}
+	db.keyDir.put(key, db.activeIndex, tombstoneVal, uint(offset))
+	return nil
+}
 
 // ListKeys returns a list of all the keys in the datastore
-func (db *Beck) ListKeys() ([]string, error)
+func (db *Beck) ListKeys() []string {
+	return db.keyDir.listKeys()
+}
 
 // Sync flushes all buffered writes to disk. It performs an fsync
-func (db *Beck) Sync() error
+func (db *Beck) Sync() error {
+	return db.activeDatafile.sync()
+}
 
 // Close shutdowns the application and mark the current active-file as old
-func (db *Beck) Close() error
+func (db *Beck) Close() error {
+	// close active datafile and all old file
+	if err := db.activeDatafile.close(); err != nil {
+		return fmt.Errorf("failed to close active datafile: %w", err)
+	}
+
+	for _, df := range db.oldDataFiles {
+		if err := df.close(); err != nil {
+			return fmt.Errorf("failed to close old datafile: %w", err)
+		}
+	}
+	return nil
+}
 
 // merge compacts all non-active files
-func (db *Beck) merge() error
+func (db *Beck) merge() error {
+	return nil
+}

@@ -13,7 +13,7 @@ BeckDB is a bitcask-inspired non-relational database. It aims to provide low lat
 ## Considerations
 
 -   The data and hints file are all kept in the data directory with extensions, `xx.log` and `xx.hint` respectively
--
+-   Keys are stored as strings with values being stored as byte slice to allow for any value type.
 
 ## References
 
