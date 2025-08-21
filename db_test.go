@@ -1,6 +1,7 @@
 package beck_test
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -15,7 +16,7 @@ const (
 
 func TestDB(t *testing.T) {
 	// setup directory and db configs
-	dataDir, err := os.MkdirTemp("./test", "beck")
+	dataDir, err := os.MkdirTemp("", "beck")
 	require.NoError(t, err)
 	defer os.RemoveAll(dataDir)
 
@@ -67,7 +68,6 @@ func testPut(t *testing.T, cfg *beck.Config) {
 
 // test that data can be retrieved from the db
 func testGet(t *testing.T, cfg *beck.Config) {
-	t.Helper()
 	db, err := beck.Open(cfg)
 	require.NoError(t, err)
 	defer db.Close()
@@ -87,4 +87,123 @@ func testGet(t *testing.T, cfg *beck.Config) {
 	dbVal, err = db.Get(key)
 	require.NoError(t, err)
 	require.Equal(t, val, dbVal)
+}
+
+// benchmarks
+func BenchmarkDb(b *testing.B) {
+	// setup directory and db configs
+	dataDir, err := os.MkdirTemp("", "beck_bench")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer os.RemoveAll(dataDir)
+
+	// start db
+	db, err := beck.Open(&beck.Config{
+		DataDir:     dataDir,
+		MaxFileSize: maxFileSize,
+		// disabled fsync
+		SyncOnWrite: false,
+		ReadOnly:    false,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, tt := range []struct {
+		name string
+		fn   func(*testing.B, *beck.BeckDB)
+	}{
+		{name: "benchmark put entry", fn: benchmarkPut},
+		{name: "benchmark get entry", fn: benchmarkGet},
+		{name: "benchmark put and get entry", fn: benchmarkPutGet},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			tt.fn(b, db)
+		})
+	}
+}
+
+// this benchmark will be used for starting and shutting down the db
+func BenchmarkOpenClose(b *testing.B) {
+	// setup directory and db configs
+	dataDir, err := os.MkdirTemp("", "beck_bench_oc")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer os.RemoveAll(dataDir)
+
+	cfg := &beck.Config{
+		DataDir:     dataDir,
+		MaxFileSize: maxFileSize,
+		// disabled fsync
+		SyncOnWrite: false,
+		ReadOnly:    false,
+	}
+
+	for range b.N {
+		db, err := beck.Open(cfg)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		if err = db.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkPut(b *testing.B, db *beck.BeckDB) {
+	key := "name"
+	val := []byte("mrshabel")
+
+	for idx := range b.N {
+		if err := db.Put(fmt.Sprintf("%s-%d", key, idx), val); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkGet(b *testing.B, db *beck.BeckDB) {
+	key := "name"
+	val := []byte("mrshabel")
+
+	// seed 1k data and reset benchmark for next iteration
+	seedKeys := 1000
+	for idx := range seedKeys {
+		if err := db.Put(fmt.Sprintf("%s-%d", key, idx), val); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	// only retrieve up to seeded keys
+	for idx := range b.N {
+		_, err := db.Get(fmt.Sprintf("%s-%d", key, idx%seedKeys))
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func benchmarkPutGet(b *testing.B, db *beck.BeckDB) {
+	key := "name_test"
+	val := []byte("mrshabel")
+
+	// put data into db
+	for idx := range b.N {
+		if err := db.Put(fmt.Sprintf("%s-%d", key, idx), val); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	// get data from db
+	for idx := range b.N {
+		_, err := db.Get(fmt.Sprintf("%s-%d", key, idx))
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }
