@@ -17,7 +17,7 @@ const (
 )
 
 var (
-	tombstoneVal = []byte(nil)
+	tombstoneVal = []byte{}
 )
 
 type Config struct {

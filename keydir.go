@@ -14,10 +14,11 @@ type keyDir struct {
 }
 
 type header struct {
-	FileID        int
-	ValueSize     int
-	ValuePosition uint
-	Timestamp     int64
+	fileID     int
+	recordSize int
+	// position marking the start of the full record on disk
+	recordPosition uint64
+	timestamp      int64
 }
 
 func NewKeyDir() *keyDir {
@@ -32,14 +33,19 @@ func (k *keyDir) get(key string) *header {
 	return k.data[key]
 }
 
-func (k *keyDir) put(key string, fileID int, value []byte, valuePosition uint) bool {
+func (k *keyDir) put(key string, fileID int, value []byte, recordSize int, recordPosition uint64) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
 	// override if it exists
 	val := k.data[key]
 
-	k.data[key] = &header{FileID: fileID, ValueSize: len(value), ValuePosition: valuePosition, Timestamp: time.Now().Unix()}
+	k.data[key] = &header{
+		fileID:         fileID,
+		recordSize:     recordSize,
+		recordPosition: recordPosition,
+		timestamp:      time.Now().Unix(),
+	}
 	return val != nil
 }
 

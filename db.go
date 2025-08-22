@@ -89,7 +89,7 @@ func (db *BeckDB) Get(key string) ([]byte, error) {
 
 	// retrieve value from datadir
 	var df *datafile
-	fileID := header.FileID
+	fileID := header.fileID
 	if fileID == db.activeIndex {
 		df = db.activeDatafile
 	} else {
@@ -100,7 +100,7 @@ func (db *BeckDB) Get(key string) ([]byte, error) {
 		return nil, ErrInvalidKey
 	}
 
-	val, err := df.read(uint64(header.ValuePosition))
+	val, err := df.read(header.recordPosition, header.recordSize)
 	if err != nil {
 		return nil, err
 	}
@@ -113,12 +113,12 @@ func (db *BeckDB) Put(key string, val []byte) error {
 		return err
 	}
 	// append to datastore then write to keydir
-	_, offset, err := db.activeDatafile.append(key, val)
+	size, offset, err := db.activeDatafile.append(key, val)
 	if err != nil {
 		return err
 	}
 
-	db.keyDir.put(key, db.activeIndex, val, uint(offset))
+	db.keyDir.put(key, db.activeIndex, val, size, offset)
 	return nil
 }
 
@@ -130,11 +130,11 @@ func (db *BeckDB) Delete(key string) error {
 	}
 
 	// append tombstone entry to datastore then write to keydir
-	_, offset, err := db.activeDatafile.append(key, tombstoneVal)
+	size, offset, err := db.activeDatafile.append(key, tombstoneVal)
 	if err != nil {
 		return err
 	}
-	db.keyDir.put(key, db.activeIndex, tombstoneVal, uint(offset))
+	db.keyDir.put(key, db.activeIndex, tombstoneVal, size, offset)
 	return nil
 }
 

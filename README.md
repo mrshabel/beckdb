@@ -37,23 +37,24 @@ make bench-memory
 
 ## Performance
 
-Based on benchmarks run on my Intel machine with **1.60GHz CPU** and **8 goroutines**:
+Based on benchmarks run on my Intel machine with **1.60GHz CPU** and **8 goroutines**, averaged over five runs:
 
 ### Throughput (Operations per Second)
 
-| Operation                | Avg Throughput      | Latency (avg) |
-| ------------------------ | ------------------- | ------------- |
-| **Write (Put)**          | **~85,000 ops/sec** | 12 μs         |
-| **Read (Get)**           | **~55,000 ops/sec** | 18 μs         |
-| **Write/Read (Put+Get)** | **~28,000 ops/sec** | 35 μs         |
-| **Database Open/Close**  | **~85 ops/sec**     | 12 ms         |
+### Throughput (Operations per Second)
+
+| Operation               | Throughput           | Latency (avg) |
+| ----------------------- | -------------------- | ------------- |
+| **Write (Put)**         | **~200,000 ops/sec** | 5 μs          |
+| **Read (Get)**          | **~175,000 ops/sec** | 6 μs          |
+| **Mixed (Put+Get)**     | **~95,000 ops/sec**  | 11 μs         |
+| **Database Open/Close** | **~90 ops/sec**      | 12 ms         |
 
 ### Key Performance Characteristics
 
--   **High Write Throughput**: Up to 85K writes/second with microsecond latency when `sync on write` is disabled
--   **Fast Reads**: 55K reads/second with consistent performance
+-   **High Write Throughput**: Up to 200K writes/second with minimal latency when `sync on write` is disabled
+-   **Fast Reads**: 175K reads per second with consistent performance
 -   **Fast Recovery**: Database startup averages 12ms. This includes rebuilding in-memory index from disk
--   **Consistent Performance**: Low variance across multiple benchmark runs
 
 ## Considerations
 

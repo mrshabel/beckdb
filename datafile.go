@@ -103,41 +103,33 @@ func (d *datafile) append(key string, val []byte) (size int, offset uint64, err 
 
 	// update file size. the previous size is the offset for the current record
 	offset = uint64(d.size)
-	d.size += len(encoded)
+	size = len(encoded)
+	d.size += size
 
-	return len(val), offset, nil
+	return size, offset, nil
 }
 
 // read retrieves the value of record at a given offset
-func (d *datafile) read(offset uint64) ([]byte, error) {
+func (d *datafile) read(offset uint64, size int) ([]byte, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	// retrieve key and value size from header
-	header := make([]byte, headerLen)
-	n, err := d.f.ReadAt(header, int64(offset))
+	// read full record and extract header
+	record := make([]byte, size)
+	n, err := d.f.ReadAt(record, int64(offset))
 	if err != nil {
 		return nil, err
 	}
-	if n < headerLen {
+	if n < size {
 		return nil, ErrInvalidRecord
 	}
 
 	// decode header
+	header := record[:headerLen]
+
 	checksum := enc.Uint32(header[:crcLen])
 	keySize := int(enc.Uint32(header[crcLen+timestampLen : crcLen+timestampLen+keySizeLen]))
-	valSize := int(enc.Uint64(header[crcLen+timestampLen+keySizeLen : crcLen+timestampLen+keySizeLen+valSizeLen]))
-
-	// read full record
-	recordSize := headerLen + keySize + valSize
-	record := make([]byte, recordSize)
-	n, err = d.f.ReadAt(record, int64(offset))
-	if err != nil {
-		return nil, err
-	}
-	if n < recordSize {
-		return nil, ErrInvalidRecord
-	}
+	valSize := int(enc.Uint64(header[crcLen+timestampLen+keySizeLen:]))
 
 	// extract value
 	key := record[headerLen : headerLen+keySize]
