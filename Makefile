@@ -2,7 +2,7 @@
 
 # run all test suites
 test:
-	go test ./...
+	go test ./... -v -race
 
 # benchmark application performance
 bench:

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"hash/crc32"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -45,7 +46,7 @@ func getChecksum(key string, val []byte) uint32 {
 	return crc32.ChecksumIEEE(data)
 }
 
-// getDatafilePath composes the filepath for the specified datadir based on the index
+// getDatafilePath composes the filepath for the specified datafile based on the index
 func getDatafilePath(dataDir string, index int) string {
 	return filepath.Join(dataDir, fmt.Sprintf("%d%s", index, datafileExt))
 }
@@ -63,4 +64,14 @@ func validateEntry(key string, val []byte) error {
 	}
 
 	return nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// getHintFilePath composes the filepath for the specified hint file based on the index
+func getHintFilePath(dataDir string, index int) string {
+	return filepath.Join(dataDir, fmt.Sprintf("%d%s", index, hintFileExt))
 }

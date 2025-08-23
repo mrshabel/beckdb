@@ -21,6 +21,11 @@ type header struct {
 	timestamp      int64
 }
 
+type keyDirEntry struct {
+	key    string
+	header *header
+}
+
 func NewKeyDir() *keyDir {
 	return &keyDir{
 		data: make(map[string]*header),
@@ -30,10 +35,15 @@ func NewKeyDir() *keyDir {
 func (k *keyDir) get(key string) *header {
 	k.mu.RLock()
 	defer k.mu.RUnlock()
-	return k.data[key]
+	h, ok := k.data[key]
+	if !ok {
+		return nil
+	}
+
+	return h
 }
 
-func (k *keyDir) put(key string, fileID int, value []byte, recordSize int, recordPosition uint64) bool {
+func (k *keyDir) put(key string, fileID int, recordSize int, recordPosition uint64) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
@@ -47,6 +57,16 @@ func (k *keyDir) put(key string, fileID int, value []byte, recordSize int, recor
 		timestamp:      time.Now().Unix(),
 	}
 	return val != nil
+}
+
+// putBatch performs a batch insert of key-header pairs into keydir
+func (k *keyDir) putBatch(entries []keyDirEntry) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	for _, entry := range entries {
+		k.data[entry.key] = entry.header
+	}
 }
 
 func (k *keyDir) delete(key string) bool {

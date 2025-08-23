@@ -7,7 +7,8 @@ BeckDB is a bitcask-inspired non-relational database. It aims to provide low lat
 Using BeckDB is simple and straightforward as shown below
 
 ```go
-// configuration with 64mb max file size. you can disable `syncOnWrite` for better write performance at the expense of strong durability
+// configuration with 64mb max file size.
+// you can disable `syncOnWrite` for better write performance at the expense of strong durability
 db, err := beck.Open(&beck.Config{
     DataDir: "./data",
     MaxFileSize: 64 * 1024 * 1024,
@@ -39,10 +40,6 @@ make bench-memory
 
 Based on benchmarks run on my Intel machine with **1.60GHz CPU** and **8 goroutines**, averaged over five runs:
 
-### Throughput (Operations per Second)
-
-### Throughput (Operations per Second)
-
 | Operation               | Throughput           | Latency (avg) |
 | ----------------------- | -------------------- | ------------- |
 | **Write (Put)**         | **~200,000 ops/sec** | 5 μs          |
@@ -65,13 +62,15 @@ Based on benchmarks run on my Intel machine with **1.60GHz CPU** and **8 gorouti
 
 ## Architecture
 
-![Architecture](./architecture.png)
+The architecture for BeckDB is available [here](./architecture.png)
 
 ## TODO
 
--   [ ] Implement stale file compaction
--   [ ] Add database server
+-   [x] Implement stale file compaction
+-   [ ] Add database server (redis compatible and HTTP)
+-   [ ] Add range scans with Red-Black Tree
 
 ## References
 
 -   Checkout the bitcask paper to know more about the underlying storage engine powering BeckDB
+-   [Background compaction and removal of stale entries](https://topic.alibabacloud.com/a/implementation-of-the-bitcask-storage-model-merge-and-hint-files_8_8_31516931.html)

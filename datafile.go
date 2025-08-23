@@ -17,7 +17,7 @@ const (
 	timestampLen = 8
 	keySizeLen   = 4
 	valSizeLen   = 8
-	// header size without actual key and data (20 bytes)
+	// header size without actual key and data (24 bytes)
 	headerLen = crcLen + timestampLen + keySizeLen + valSizeLen
 )
 
@@ -71,13 +71,13 @@ func NewDatafile(name string, readOnly bool, syncOnWrite bool, syncInterval time
 
 // append the key-value pair to the file and return the value size, and position
 func (d *datafile) append(key string, val []byte) (size int, offset uint64, err error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	// skip if datafile is opened in read-only mode
 	if d.readOnly {
 		return 0, 0, ErrDatabaseReadOnly
 	}
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	// create encoded record and write to file handler
 	r := newRecord(key, val)
@@ -142,6 +142,56 @@ func (d *datafile) read(offset uint64, size int) ([]byte, error) {
 	return val, nil
 }
 
+// readRecord reads the full record from a given offset without knowing the record size.
+// this is useful for background merging. the record and total size is returned
+func (d *datafile) readRecord(offset uint64) (*record, int, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	// retrieve key and value size from header
+	header := make([]byte, headerLen)
+	n, err := d.f.ReadAt(header, int64(offset))
+	if err != nil {
+		return nil, 0, err
+	}
+	if n < headerLen {
+		return nil, 0, ErrInvalidRecord
+	}
+
+	checksum := enc.Uint32(header[:crcLen])
+	timestamp := int64(enc.Uint64(header[crcLen : crcLen+timestampLen]))
+	keySize := int(enc.Uint32(header[crcLen+timestampLen : crcLen+timestampLen+keySizeLen]))
+	valSize := int(enc.Uint64(header[crcLen+timestampLen+keySizeLen:]))
+
+	// read full record
+	recordSize := headerLen + keySize + valSize
+	data := make([]byte, recordSize)
+	n, err = d.f.ReadAt(data, int64(offset))
+	if err != nil {
+		return nil, 0, err
+	}
+	if n < recordSize {
+		return nil, 0, ErrInvalidRecord
+	}
+
+	// extract value
+	key := data[headerLen : headerLen+keySize]
+	val := data[headerLen+keySize : headerLen+keySize+valSize]
+
+	// verify checksum and retrieve data
+	if getChecksum(string(key), val) != checksum {
+		return nil, 0, ErrInvalidRecord
+	}
+	return &record{
+		checksum:  checksum,
+		timestamp: timestamp,
+		keySize:   keySize,
+		valSize:   valSize,
+		key:       string(key),
+		val:       val,
+	}, recordSize, nil
+}
+
 // sync flushes all buffered writes to disk in the specified interval
 func (d *datafile) sync() error {
 	if d.syncInterval <= 0 {
@@ -156,11 +206,28 @@ func (d *datafile) sync() error {
 
 	for range ticker.C {
 		d.mu.Lock()
-		defer d.mu.Unlock()
 
 		if err := d.f.Sync(); err != nil {
+			d.mu.Unlock()
 			return err
 		}
+
+		d.mu.Unlock()
+	}
+	return nil
+}
+
+// persist flushes all buffered writes to disk instantly
+func (d *datafile) persist() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.readOnly {
+		return ErrDatabaseReadOnly
+	}
+
+	if err := d.f.Sync(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -178,6 +245,19 @@ func (d *datafile) close() error {
 	}
 
 	return d.f.Close()
+}
+
+// purge closes the current datafile and removes it from disk.
+// this should be called after all references to the current datafile are cleared
+func (d *datafile) purge() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if err := d.f.Close(); err != nil {
+		return err
+	}
+
+	return os.Remove(d.f.Name())
 }
 
 // record is a disk representation of the key-value record with its metadata

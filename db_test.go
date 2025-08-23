@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	beck "github.com/mrshabel/beckdb"
 	"github.com/stretchr/testify/require"
@@ -20,7 +21,12 @@ func TestDB(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(dataDir)
 
-	cfg := &beck.Config{DataDir: dataDir, MaxFileSize: maxFileSize, SyncOnWrite: true, ReadOnly: false}
+	cfg := &beck.Config{
+		DataDir:     dataDir,
+		MaxFileSize: maxFileSize,
+		SyncOnWrite: true,
+		ReadOnly:    false,
+	}
 
 	// bench test
 	for _, tt := range []struct {
@@ -30,6 +36,7 @@ func TestDB(t *testing.T) {
 		{name: "test open", fn: testOpen},
 		{name: "test put entry", fn: testPut},
 		{name: "test retrieve entry", fn: testGet},
+		{name: "test merge", fn: testMerge},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.fn(t, cfg)
@@ -72,7 +79,7 @@ func testGet(t *testing.T, cfg *beck.Config) {
 	require.NoError(t, err)
 	defer db.Close()
 
-	key := "name"
+	key := "name_test_not_found"
 	val := []byte("mrshabel")
 
 	// attempt to retrieve missing key
@@ -87,6 +94,59 @@ func testGet(t *testing.T, cfg *beck.Config) {
 	dbVal, err = db.Get(key)
 	require.NoError(t, err)
 	require.Equal(t, val, dbVal)
+}
+
+// test that old datafiles can be merged
+func testMerge(t *testing.T, cfg *beck.Config) {
+	// small max file size for testing here
+	cp := *cfg
+	cp.MaxFileSize = 50
+	cp.SyncOnWrite = true
+	// disabled background merging to allow for predictable testing
+	cp.MergeInterval = 1 * time.Hour
+	cp.TrackActiveDatafileInterval = 1 * time.Hour
+
+	db, err := beck.Open(&cp)
+	require.NoError(t, err)
+	defer db.Close()
+
+	// seed 200 entries and rotate active datafile on each 10th entry
+	for idx := range 200 {
+		err = db.Put(fmt.Sprintf("key%d", idx), []byte(fmt.Sprintf("value%d", idx)))
+		require.NoError(t, err)
+
+		if (idx+1)%10 == 0 {
+			db.RotateActiveDatafile()
+
+		}
+	}
+
+	// create tombstone records
+	err = db.Put("key1", []byte("updated_value1"))
+	require.NoError(t, err)
+
+	err = db.Delete("key2")
+	require.NoError(t, err)
+
+	// merge old datafiles
+	err = db.Compact()
+	require.NoError(t, err)
+
+	// verify data after merge for both live and removed records
+	val, err := db.Get("key1")
+	require.NoError(t, err)
+	require.Equal(t, []byte("updated_value1"), val)
+
+	_, err = db.Get("key2")
+	require.ErrorIs(t, err, beck.ErrKeyNotFound)
+
+	// verify put/get still works after merge
+	err = db.Put("new_key", []byte("new_value"))
+	require.NoError(t, err)
+
+	val, err = db.Get("new_key")
+	require.NoError(t, err)
+	require.Equal(t, []byte("new_value"), val)
 }
 
 // benchmarks
