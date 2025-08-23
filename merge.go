@@ -67,6 +67,7 @@ func (db *BeckDB) Compact() error {
 		mergedDF.purge()
 		return fmt.Errorf("failed to create hint file: %w", err)
 	}
+	defer hintf.close()
 
 	mergedKeyDirEntries := make([]keyDirEntry, 0, len(liveEntries))
 	now := time.Now().Unix()
