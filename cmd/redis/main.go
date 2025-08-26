@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 )
 
 func main() {
@@ -38,12 +39,31 @@ func handleConn(conn net.Conn) {
 		resp := NewResp(conn)
 		data, err := resp.Read()
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("Error reading request: ", err)
 			return
 		}
 
-		log.Printf("client data read: %v\n", *data)
-		// write pong response
-		conn.Write([]byte("+OK\r\n"))
+		// input data should be an array for all commands implemented
+		if data.typ != Array {
+			resp.WriteError("ERR invalid request payload. expected array")
+			continue
+		}
+		if len(data.array) == 0 {
+			resp.WriteError("Err invalid request payload. expected non-empty array")
+			continue
+		}
+
+		// extract command and args. command is the first entry of the array
+		command := strings.ToUpper(data.array[0].bulkStr)
+		args := data.array[1:]
+
+		// process request
+		handler, ok := handlers[HandlerCommand(command)]
+		if !ok {
+			fmt.Println("command handler not found: ", command)
+			resp.WriteError("Err invalid command type")
+			continue
+		}
+		resp.Write(handler(args))
 	}
 }

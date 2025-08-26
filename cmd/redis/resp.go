@@ -1,3 +1,4 @@
+// reference: https://redis.io/docs/latest/develop/reference/protocol-spec/#resp-versions
 package main
 
 import (
@@ -8,51 +9,83 @@ import (
 	"strconv"
 )
 
-type DataType byte
+type DataType string
 
 const (
-	String     DataType = '+'
-	Error      DataType = '-'
-	Integer    DataType = ':'
-	Boolean    DataType = '#'
-	Array      DataType = '*'
-	BulkString DataType = '$'
+	Array        DataType = "array"
+	SimpleString DataType = "string"
+	BulkString   DataType = "bulkString"
+	Null         DataType = "null"
+	Error        DataType = "error"
+)
+
+// resp single byte prefix for data type
+type Prefix byte
+
+const (
+	PrefixSimpleString Prefix = '+'
+	PrefixError        Prefix = '-'
+	PrefixInteger      Prefix = ':'
+	PrefixBoolean      Prefix = '#'
+	PrefixArray        Prefix = '*'
+	PrefixBulkString   Prefix = '$'
 )
 
 type Token byte
 
 const (
-	CR   Token = '\r'
-	LF   Token = '\n'
-	CRLF Token = CR + LF
+	CR Token = '\r'
+	LF Token = '\n'
 )
+
+var CRLF = []byte{byte(CR), byte(LF)}
 
 // errors
 var (
-	ErrExpectCRLF = errors.New("Err: protocol error. expected CRLF token")
+	ErrExpectCRLF = errors.New("err: protocol error. expected CRLF token")
 )
-
-// Value holds commands and arguments
-// TODO: optimize by recording value as a byte slice and casting type based on value
-type Value struct {
-	// data type of the value
-	typ string
-	// string value
-	str string
-	// number value
-	num int
-	// bulk string value
-	bulkStr string
-	// all values received from the array
-	array []Value
-}
 
 type Resp struct {
 	reader *bufio.Reader
+	writer io.Writer
 }
 
-func NewResp(reader io.Reader) *Resp {
-	return &Resp{reader: bufio.NewReader(reader)}
+func NewResp(rw io.ReadWriter) *Resp {
+	return &Resp{
+		reader: bufio.NewReader(rw),
+		writer: rw,
+	}
+}
+
+// Read extracts the value from the resp instance
+func (r *Resp) Read() (*Value, error) {
+	// get data type
+	t, err := r.reader.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+
+	// process data. accepted types are array and bulk strings
+	switch Prefix(t) {
+	case PrefixArray:
+		return r.readArray()
+	case PrefixBulkString:
+		return r.readBulkString()
+	default:
+		return nil, fmt.Errorf("err: protocol error. unknown type %v", string(t))
+	}
+}
+
+// Write writes the resp value to the underlying writer. this may typically be a response
+func (r *Resp) Write(v Value) error {
+	data := v.Marshal()
+	_, err := r.writer.Write(data)
+	return err
+}
+
+// WriteError sends an error reply to the client
+func (r *Resp) WriteError(msg string) error {
+	return r.Write(Value{typ: Error, str: msg})
 }
 
 // readLine reads the input stream until the first occurrence of a CRLF token
@@ -85,26 +118,8 @@ func (r *Resp) readInteger() (num, n int, err error) {
 	return int(val), n, nil
 }
 
-func (r *Resp) Read() (*Value, error) {
-	// get data type
-	t, err := r.reader.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-
-	// process data. accepted types are array and bulk strings
-	switch DataType(t) {
-	case Array:
-		return r.readArray()
-	case BulkString:
-		return r.readBulkString()
-	default:
-		return nil, fmt.Errorf("Err: protocol error. unknown type %v", string(t))
-	}
-}
-
 func (r *Resp) readArray() (*Value, error) {
-	val := &Value{typ: "array"}
+	val := &Value{typ: Array}
 
 	// get array length
 	arrLen, _, err := r.readInteger()
@@ -127,7 +142,7 @@ func (r *Resp) readArray() (*Value, error) {
 }
 
 func (r *Resp) readBulkString() (*Value, error) {
-	val := &Value{typ: "bulkString"}
+	val := &Value{typ: BulkString}
 
 	// get string length
 	strLen, _, err := r.readInteger()
@@ -147,4 +162,97 @@ func (r *Resp) readBulkString() (*Value, error) {
 	}
 
 	return val, nil
+}
+
+// Value holds commands and arguments
+// TODO: optimize by recording value as a byte slice and casting type based on value
+type Value struct {
+	// data type of the value
+	typ DataType
+	// string value
+	str string
+	// number value
+	num int
+	// bulk string value
+	bulkStr string
+	// all values received from the array
+	array []Value
+}
+
+// convert value into resp bytes. all marshalled data is suffixed with CRLF token
+// <prefix sign - data - crlf>
+func (v *Value) Marshal() []byte {
+	switch v.typ {
+	case SimpleString:
+		return v.marshalSimpleString()
+	case BulkString:
+		return v.marshalBulkString()
+	case Array:
+		return v.marshalArray()
+	case Null:
+		return v.marshalNullBulkString()
+	case Error:
+		return v.marshalError()
+	default:
+		return []byte{}
+	}
+}
+
+func (v *Value) marshalSimpleString() []byte {
+	var data []byte
+	// sign, followed by string then crlf
+	data = append(data, byte(PrefixSimpleString))
+	data = append(data, v.str...)
+	data = append(data, CRLF...)
+	return data
+}
+
+func (v *Value) marshalBulkString() []byte {
+	var data []byte
+	length := strconv.Itoa(len(v.bulkStr))
+	// sign, length, crlf, bulk string then crlf
+	data = append(data, byte(PrefixBulkString))
+	data = append(data, []byte(length)...)
+	data = append(data, CRLF...)
+	data = append(data, []byte(v.bulkStr)...)
+	data = append(data, CRLF...)
+
+	return data
+}
+
+func (v *Value) marshalArray() []byte {
+	var data []byte
+	length := strconv.Itoa(len(v.array))
+	// sign, length of array, crlf, elements1...elementN
+	data = append(data, byte(PrefixArray))
+	data = append(data, []byte(length)...)
+	data = append(data, CRLF...)
+
+	// append elements one by one
+	for _, val := range v.array {
+		// since type is unknown, the parent marshal function is called
+		data = append(data, val.Marshal()...)
+	}
+
+	return data
+}
+
+// marshal a resp empty bulk string
+func (v *Value) marshalNullBulkString() []byte {
+	// sign, followed by-1 then crlf
+	return []byte("$-1\r\n")
+}
+
+// marshal a resp simple error
+func (v *Value) marshalError() []byte {
+	var data []byte
+	// sign, followed by error string then crlf
+	data = append(data, byte(PrefixError))
+	data = append(data, v.str...)
+	data = append(data, CRLF...)
+	return data
+}
+
+type Writer struct {
+	writer io.Writer
 }
