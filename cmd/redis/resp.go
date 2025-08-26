@@ -14,6 +14,7 @@ type DataType string
 const (
 	Array        DataType = "array"
 	SimpleString DataType = "string"
+	Integer      DataType = "integer"
 	BulkString   DataType = "bulkString"
 	Null         DataType = "null"
 	Error        DataType = "error"
@@ -185,6 +186,8 @@ func (v *Value) Marshal() []byte {
 	switch v.typ {
 	case SimpleString:
 		return v.marshalSimpleString()
+	case Integer:
+		return v.marshalInteger()
 	case BulkString:
 		return v.marshalBulkString()
 	case Array:
@@ -203,6 +206,15 @@ func (v *Value) marshalSimpleString() []byte {
 	// sign, followed by string then crlf
 	data = append(data, byte(PrefixSimpleString))
 	data = append(data, v.str...)
+	data = append(data, CRLF...)
+	return data
+}
+
+func (v *Value) marshalInteger() []byte {
+	var data []byte
+	// sign, followed by number with sign (positive, negative) then crlf
+	data = append(data, byte(PrefixInteger))
+	data = append(data, []byte(strconv.Itoa(v.num))...)
 	data = append(data, CRLF...)
 	return data
 }
