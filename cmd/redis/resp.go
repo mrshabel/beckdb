@@ -66,7 +66,7 @@ func (r *Resp) Read() (*Value, error) {
 		return nil, err
 	}
 
-	// process data. accepted types are array and bulk strings
+	// process data by sending data with data type stripped off
 	switch Prefix(t) {
 	case PrefixArray:
 		return r.readArray()
@@ -106,6 +106,8 @@ func (r *Resp) readLine() (line []byte, length int, err error) {
 	return line[:len(line)-2], len(line), nil
 }
 
+// readInteger reads only the integer component of the input stream.
+// All prefixes such as data type and length should be stripped off before it's called
 func (r *Resp) readInteger() (num, n int, err error) {
 	// read the record line
 	line, n, err := r.readLine()
@@ -119,6 +121,8 @@ func (r *Resp) readInteger() (num, n int, err error) {
 	return int(val), n, nil
 }
 
+// readArray reads the full array data from array length to the CRLF token
+// each element in the array is read and processed recursively
 func (r *Resp) readArray() (*Value, error) {
 	val := &Value{typ: Array}
 
@@ -128,7 +132,7 @@ func (r *Resp) readArray() (*Value, error) {
 		return nil, err
 	}
 
-	// process each line recursively
+	// process each array element recursively
 	val.array = make([]Value, arrLen)
 	for idx := range arrLen {
 		cur, err := r.Read()
@@ -142,6 +146,7 @@ func (r *Resp) readArray() (*Value, error) {
 	return val, nil
 }
 
+// readBulkString reads the full bulk string from the string length to the CRLF token
 func (r *Resp) readBulkString() (*Value, error) {
 	val := &Value{typ: BulkString}
 

@@ -66,11 +66,14 @@ make test
 
 # run benchmark test
 make bench-memory
+
+# run benchmark on server version
+make bench-server
 ```
 
 ## Performance
 
-Based on benchmarks run on my Intel machine with **1.60GHz CPU** and **8 goroutines**, averaged over five runs for the embedded version of BeckDB:
+Based on benchmarks run on my Intel machine with **1.60GHz CPU**, averaged over five runs for the embedded version of BeckDB:
 
 | Operation               | Throughput           | Latency (avg) |
 | ----------------------- | -------------------- | ------------- |
@@ -79,11 +82,15 @@ Based on benchmarks run on my Intel machine with **1.60GHz CPU** and **8 gorouti
 | **Mixed (Put+Get)**     | **~95,000 ops/sec**  | 11 μs         |
 | **Database Open/Close** | **~90 ops/sec**      | 12 ms         |
 
-### Key Performance Characteristics
+The following benchmarks were run against the **Redis-compatible server** on a 1.60GHz CPU, using `redis-benchmark` with 50 parallel clients and a 256-byte payload.
 
--   **High Write Throughput**: Up to 200K writes/second with minimal latency when `sync on write` is disabled
--   **Fast Reads**: 175K reads per second with consistent performance
--   **Fast Recovery**: Database startup averages 12ms. This includes rebuilding in-memory index from disk
+| Operation               | Throughput (Server) | Latency (p99.9) |
+| ----------------------- | ------------------- | --------------- |
+| **Write (`SET`)**       | **~29,000 ops/sec** | ~4 ms           |
+| **Read (`GET`)**        | **~27,000 ops/sec** | ~9 ms           |
+| **Mixed (`SET`+`GET`)** | **~20,000 ops/sec** | ~12 ms          |
+
+**Note on Performance:** The benchmarks for the networked server show practical, real-world throughput. The raw, embedded version of BeckDB, which eliminates network and protocol overhead, achieves significantly higher performance (~200k ops/sec).
 
 ## Considerations
 
